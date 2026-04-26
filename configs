@@ -1,0 +1,81 @@
+# =============================================================================
+# default_config.yaml — VO₂ Multi-Task Reservoir Computing
+# =============================================================================
+# All hyperparameters used in the paper's main results.
+# Validated on Kaggle Tesla T4 (15 GB RAM).
+# Reference: Zhang et al., arXiv:2312.12899v3, Section IV.E
+# =============================================================================
+
+# --- Reservoir (physical) parameters ---
+reservoir:
+  Nx: 28                  # Grid rows (must match image height)
+  Ny: 28                  # Grid columns (must match image width)
+  V_min: 10.5             # [V] Input voltage for zero pixel intensity
+  V_max: 12.2             # [V] Input voltage for max pixel intensity
+  Cth_factor: 0.15        # Thermal capacitance scaling (Cth = 7.44 pJ/K)
+  noise_strength: 0.0002  # [µJ·s⁻¹/²] Stochastic noise amplitude
+  couple_factor: 0.02     # Nearest-neighbour thermal coupling strength
+  width_factor: 1.0       # VO₂ hysteresis width scaling (1.0 = no change)
+  T_base: 325             # [K] Ambient (bath) temperature
+  R_load: 12              # [kΩ] Load resistance
+
+# --- Simulation parameters ---
+simulation:
+  t_max: 10000            # [ns] Simulation duration per image (= 10 µs)
+  dt: 10                  # [ns] Euler-Maruyama integration time step
+  len_y: 50               # Time steps per temporal bin (50 × 10 ns = 500 ns)
+  n_bins: 20              # Number of temporal bins (t_max / dt / len_y)
+  peak_threshold: 1.5     # [mA] Minimum current for spike detection
+  min_dist: 101           # [steps] Minimum inter-spike distance
+
+# --- Feature dimensions ---
+features:
+  n_neurons: 784          # Nx × Ny
+  n_bins: 20              # Temporal bins per neuron
+  n_features: 15680       # n_neurons × n_bins (used by all readouts)
+
+# --- Dataset ---
+dataset:
+  name: "Colored MNIST"
+  base: "MNIST"           # torchvision source
+  train_size: 60000
+  test_size: 10000
+  n_colors: 3             # Red, Green, Blue
+  color_factors:          # Luminance scaling per color
+    red:   1.00
+    green: 0.70
+    blue:  0.50
+  color_assignment: "random_uniform"   # Colors assigned independently of digit
+
+# --- Training (Ridge Regression) ---
+training:
+  method: "ridge_regression"
+  batch_size: 50          # Mini-batch size for feature extraction (GPU memory)
+  alpha_digit: 0.001      # Ridge regularisation — digit task (α = 1×10⁻³)
+  alpha_color: 0.001      # Ridge regularisation — color task  (α = 1×10⁻³)
+  alpha_parity: 0.0001    # Ridge regularisation — parity task (α = 1×10⁻⁴)
+
+# --- Tasks ---
+tasks:
+  digit:
+    n_classes: 10
+    class_names: ["0","1","2","3","4","5","6","7","8","9"]
+  color:
+    n_classes: 3
+    class_names: ["Red", "Green", "Blue"]
+  parity:
+    n_classes: 2
+    class_names: ["Even", "Odd"]
+
+# --- Hardware ---
+hardware:
+  device: "cuda"          # "cuda" or "cpu"
+  precision: "float32"    # float32 recommended (float16 causes instability)
+
+# --- Paths ---
+paths:
+  data_dir: "data/"
+  results_dir: "results/"
+  figures_dir: "figures/"
+  checkpoint: "results/checkpoint_ridge_regression.pth"
+  classifiers: "results/ridge_classifiers.pkl"
