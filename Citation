@@ -1,0 +1,47 @@
+cff-version: 1.2.0
+message: >
+  If you use this software, please cite both the software itself
+  and the associated journal paper as described below.
+
+# ============================================================
+# Software citation
+# ============================================================
+title: "Exploiting VO₂ Phase-Transition Dynamics for Multi-Task Reservoir Computing Without Catastrophic Forgetting"
+version: "1.0.0"
+date-released: "[ 2026-04-24]"
+license: MIT
+repository-code: "https://github.com/mandanarst19/Multi-Task-Learning-on-Phase-Change-Material"
+
+authors:
+  - family-names: "Roosta"
+    given-names: "Mandana"
+    affiliation: "[Shahid Beheshti University / Physics Depatment]"
+    email: "[roostamandana@gmail.com]"
+
+
+
+
+keywords:
+  - reservoir computing
+  - neuromorphic computing
+  - vanadium dioxide
+  - VO2
+  - phase-change materials
+  - multi-task learning
+  - thermal neuristor
+  - spike neural network
+  - catastrophic forgetting
+  - MNIST
+
+abstract: >
+  This repository contains the implementation of a multi-task reservoir
+  computing system using VO₂ (vanadium dioxide) thermal neuristors as
+  the physical computing substrate. A 28×28 array of thermally coupled
+  VO₂ neuristors simultaneously solves three independent classification
+  tasks — digit recognition, color classification, and parity detection —
+  on a custom Colored MNIST dataset. Because the reservoir dynamics are
+  fixed and only linear readout layers are trained, the system is immune
+  to catastrophic forgetting by construction.
+
+# ============================================================
+
