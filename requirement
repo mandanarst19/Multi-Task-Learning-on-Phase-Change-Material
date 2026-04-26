@@ -1,0 +1,38 @@
+# ============================================================================
+# VO₂ Multi-Task Reservoir Computing — Python Dependencies
+# Tested on Python 3.10, CUDA 11.8, Tesla T4 (15 GB)
+# ============================================================================
+
+# --- Core scientific stack ---
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0
+
+# --- Deep learning ---
+torch>=2.0.0
+torchvision>=0.15.0
+
+# --- Machine learning (readout classifiers) ---
+scikit-learn>=1.2.0
+
+# --- Data visualisation ---
+matplotlib>=3.7.0
+
+# --- Progress & utilities ---
+tqdm>=4.65.0
+
+# --- Serialisation ---
+# pickle is part of the standard library — no install needed
+
+# --- Jupyter / notebook support (optional, for notebooks/) ---
+jupyter>=1.0.0
+ipykernel>=6.22.0
+
+# ============================================================================
+# Notes
+# ============================================================================
+# PyTorch with CUDA 11.8 — install separately if needed:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# For CPU-only systems:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# ============================================================================
