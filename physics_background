@@ -1,0 +1,138 @@
+# Physics Background: VO₂ Thermal Neuristors and Reservoir Computing
+
+## 1. Vanadium Dioxide (VO₂) as a Neuromorphic Material
+
+Vanadium dioxide is a correlated electron material that undergoes a sharp
+first-order insulator-to-metal phase transition (IMT) near 340 K.  Across
+this transition, its resistivity drops by approximately three orders of
+magnitude (from ~MΩ to ~kΩ range), and this transition can be triggered
+thermally, electrically, or optically.
+
+When connected in a circuit with a load resistor, a VO₂ device acts as a
+**thermal neuristor** — a physical analogue of a leaky integrate-and-fire (LIF)
+neuron:
+
+1. **Integration phase** — an input voltage drives current, generating Joule
+   heating that raises the device temperature.
+2. **Fire phase** — once T exceeds the IMT threshold (~340 K), resistance
+   drops dramatically, producing a large current spike.
+3. **Reset phase** — reduced Joule heating after spiking allows the device to
+   cool below the reverse transition (~333 K), returning to the insulating state.
+
+## 2. Coupled Electrical and Thermal Dynamics
+
+Each neuristor in the 28×28 array evolves according to two coupled ODEs:
+
+### Electrical equation
+
+$$C \frac{dV}{dt} = \frac{V_\text{in} - V}{R_\text{load}} - \frac{V}{R(T)}$$
+
+Here $C = 145.35$ pF is the parasitic electrical capacitance, $R_\text{load} = 12$ kΩ
+is the load resistance, and $R(T)$ is the strongly temperature-dependent VO₂
+resistance.
+
+### Thermal equation
+
+$$C_\text{th} \frac{dT}{dt} = I^2 R(T) - S_\text{env}(T - T_0) + S_c \nabla^2 T + \sigma \xi(t)$$
+
+Here:
+- $C_\text{th} = C_\text{th,factor} \times 49.63$ pJ/K — thermal capacitance
+- $S_\text{env}$ — heat loss to the environment (depends on coupling geometry)
+- $S_c$ — nearest-neighbour thermal coupling conductance
+- $\nabla^2 T$ — discrete 2-D Laplacian (thermal diffusion between neighbours)
+- $\sigma \xi(t)$ — stochastic noise term (Euler–Maruyama, Gaussian white noise)
+
+### Three physical timescales
+
+The three characteristic timescales of the system determine its computational
+properties:
+
+| Timescale | Value | Physical origin |
+|-----------|-------|----------------|
+| τ_metallic | ~187 ns | RC relaxation in metallic state |
+| τ_thermal  | ~241 ns | Thermal relaxation ($C_\text{th} / S_\text{env}$) |
+| τ_insulating | ~7.57 µs | RC relaxation in insulating state |
+
+The ~40× separation between τ_thermal and τ_insulating creates a natural
+"fast oscillation / slow recovery" dynamic that generates rich temporal patterns
+suitable for reservoir computing.
+
+## 3. VO₂ Resistance Model with Hysteresis
+
+The sharp IMT and the thermal hysteresis between the heating and cooling branches
+are captured by:
+
+$$R(T, \delta) = R_m + \frac{R_0 e^{E_a/T} - R_m}
+{\left[1 + e^{-(T - T_c - w(1-\delta)/2) / (w/\beta)}\right]^\gamma}$$
+
+where $\delta = +1$ on the heating branch and $\delta = -1$ on the cooling branch.
+
+**Fitted parameters (from experiment, Zhang et al. 2024):**
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| $w$ | 7.19 K | Hysteresis full-width |
+| $T_c$ | 332.8 K | IMT centre temperature |
+| $\beta$ | 0.253 K⁻¹ | Transition sharpness |
+| $R_0$ | 5.36 mΩ | Insulating pre-exponential |
+| $E_a$ | 5220 K | Activation energy |
+| $R_m$ | 1286 Ω | Metallic resistance floor |
+| $\gamma$ | 0.956 | Shape exponent |
+
+Minor-loop (partial reversal) behaviour is tracked via the interpolation function
+$P(x, \gamma)$, which smoothly blends between the major loop and the reversal point.
+
+## 4. Reservoir Computing Principles
+
+Reservoir computing is a paradigm where a fixed, high-dimensional dynamical system
+(the "reservoir") nonlinearly projects inputs into a rich feature space, and only
+a simple linear readout is trained.
+
+**Why VO₂ networks are ideal reservoirs:**
+
+- **Nonlinearity**: The IMT creates strong nonlinear input–output mappings.
+- **Memory**: Thermal dynamics create fading memory of input history.
+- **High dimensionality**: 784 coupled neuristors produce 15,680-dimensional
+  feature vectors.
+- **Fixed dynamics**: No training required — eliminates catastrophic forgetting.
+
+**Echo State Property**: The reservoir must "forget" its initial conditions and
+converge to a trajectory determined solely by the input.  The VO₂ system operates
+in a **synchronised rigid phase** (not at criticality), which satisfies this
+property while providing reproducible dynamics.
+
+## 5. Temporal Pooling Feature Extraction
+
+Unlike binary spike counting (which loses timing information), this work uses
+**temporal pooling**: the 10 µs current trajectory of each neuristor is divided
+into 20 windows of 500 ns each, and the spike count within each window is recorded.
+
+This yields a $784 \times 20 = 15{,}680$-dimensional feature vector per image
+that encodes *both which neurons fired and when* — providing 32× more information
+than simple spike counting.
+
+## 6. Multi-Task Learning Without Catastrophic Forgetting
+
+In standard deep learning, training on task B after task A often degrades
+performance on task A (catastrophic forgetting).  Reservoir computing avoids
+this entirely:
+
+- The reservoir is **never updated** — it generates the same features regardless
+  of task order.
+- Each task's readout $W_\text{out}$ is trained independently by solving:
+  $$W_\text{out} = Y X^\top (X X^\top + \lambda I)^{-1}$$
+  where $X$ is the feature matrix and $Y$ is the label matrix.
+- Because the readouts are independent, they cannot interfere with each other.
+- **Task independence** is verified statistically: chi-square test on joint
+  predictions gives χ²(4) = 63.51, p = 0.924, confirming no spurious correlation.
+
+## References
+
+1. Zhang et al., "Collective dynamics and long-range order in thermal neuristor
+   networks", arXiv:2312.12899v3 (2024).
+2. Jaeger, H. & Haas, H., "Harnessing nonlinearity: predicting chaotic systems
+   and saving energy in wireless communication", Science 304, 78–80 (2004).
+3. Kirkpatrick et al., "Overcoming catastrophic forgetting in neural networks",
+   PNAS 114, 3521–3526 (2017).
+4. Kong et al., "Reservoir computing as a tool for climate prediction",
+   Nature Communications (2024).
