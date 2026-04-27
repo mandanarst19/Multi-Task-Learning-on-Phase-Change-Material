@@ -6,7 +6,7 @@ Implements the coupled electrical and thermal dynamics of a vanadium dioxide
 (VO₂) neuristor network, following:
 
     Zhang et al., "Collective dynamics and long-range order in thermal
-    neuristor networks", arXiv:2312.12899v3.
+    
 
 Physical picture
 ----------------
