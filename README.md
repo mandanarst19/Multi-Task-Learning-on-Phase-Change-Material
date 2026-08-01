@@ -1,261 +1,223 @@
-# Multi-Task-Learning-on-Phase-Change-Material
-Exploiting VO₂ Phase-Transition Dynamics for Multi-Task Reservoir Computing Without Catastrophic Forgetting
-> **First demonstration of multi-task learning using phase-change materials.**  
-> A single fixed reservoir of 784 VO₂ thermal neuristors simultaneously solves three independent classification tasks — digit recognition, color classification, and parity detection — on a custom Colored MNIST dataset, with no catastrophic forgetting.
+# Multi-Task Learning on Phase-Change Material Reservoir Computing
+
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Kaggle T4](https://img.shields.io/badge/platform-Kaggle%20T4-orange.svg)](https://kaggle.com)
+
+**First demonstration of multi-task learning on a phase-change material reservoir.**  
+A single fixed reservoir of 784 VO₂ thermal neuristors simultaneously solves three independent classification tasks — digit recognition, color classification, and parity detection — on a custom Colored MNIST dataset, with zero catastrophic forgetting.
 
 ---
 
-## Table of Contents
-- [Abstract](#abstract)
-- [Key Results](#key-results)
-- [Architecture Overview](#architecture-overview)
-- [Reproducing Results](#reproducing-results)
-- [Physics Background](#physics-background)
-- [Citation](#citation)
-- [Contact](#contact)
+## Results
+
+| Task | Accuracy | Random Baseline |
+|------|----------|-----------------|
+| Digit recognition (0–9) | **84.46%** | 10% |
+| Color classification (10 colors) | **77.96%** | 10% |
+| Parity detection (even/odd) | **87.66%** | 50% |
+
+- All three tasks trained on the **same reservoir**, same forward pass, independent linear readouts
+- **Zero catastrophic forgetting** — verified across all training orders (architectural guarantee)
+- **Task independence** verified: χ²(10×10) = 95.27, p = 0.133 (digit–color)
+- Training: single-pass Ridge Regression, ~90 minutes on Kaggle T4
 
 ---
 
-## Abstract
+## Key Findings
 
-This work presents the first demonstration of multi-task learning using VO₂ (vanadium dioxide) thermal neuristors as a physical reservoir computing substrate. A 28×28 array of thermally coupled VO₂ neuristors — each implementing a physical leaky integrate-and-fire neuron through coupled electrical and thermal dynamics — processes grayscale images and simultaneously trains three independent linear readout layers for digit recognition (0–9), color classification (Red/Green/Blue), and parity detection (Even/Odd), operating on a custom Colored MNIST dataset.
+**1 — Multi-task learning on phase-change material**  
+Three simultaneous tasks on a single VO₂ reservoir. Fixed reservoir + independent Ridge readouts guarantee zero catastrophic forgetting by construction.
 
-The reservoir exploits the insulator-to-metal phase transition of VO₂ at ~340 K, producing rich spatiotemporal spike patterns that are captured via a novel **temporal pooling** approach: continuous current trajectories are binned into 20 temporal windows of 500 ns each, yielding 15,680-dimensional feature vectors that encode both which neurons fired and when. Because the reservoir dynamics remain entirely fixed during training and only three independent linear readout layers are optimised via ridge regression, catastrophic forgetting is eliminated by construction. The system achieves **86.89% digit accuracy**, **76.50% color accuracy** (from grayscale luminance cues alone), and **88.73% parity accuracy**, with all tasks statistically independent (χ² = 63.51, p = 0.924).
+**2 — Noise-induced phase transition**  
+Performance stable across σ ∈ [0, 0.0002], then abrupt transition between σ = 0.0002 and σ = 0.0005:
+- Feature variance collapses ~18,000-fold (~4.3 orders of magnitude)
+- Color drops 50 pp, parity drops only 0.5 pp
+- No peak above zero-noise baseline — this is a phase transition, not Stochastic Resonance
+
+**3 — Timescale-task specialization**  
+Color classification requires slow dynamics (τ_ins ≈ 7.57 μs):
+- Accuracy drops 41 pp when restricted to early bins (0–2 μs)
+- Parity stable across all temporal windows (τ_met ≈ 187 ns sufficient)
+- Confirmed by two independent methods (temporal masking + weight importance)
+
+**4 — Causal isolation of τ_ins**  
+R_ins scaled by r ∈ {1.0, 0.5, 0.2, 0.1} reduces τ_ins from 7.54 μs to 0.75 μs while leaving τ_met and τ_th unchanged:
+- Color drops 33 pp; parity drops < 1 pp
+- 2-class color also collapses → task difficulty ruled out
+- Late bins [16–19] collapse; early bins [0–3] remain stable → mechanism confirmed
 
 ---
 
-## Key Results
-
-| Task | Accuracy | Random Baseline | Method |
-|------|----------|-----------------|--------|
-| Digit Recognition (0–9) | **86.89%** | 10.0% | Ridge Regression |
-| Color Classification (R/G/B) | **76.50%** | 33.3% | Ridge Regression |
-| Parity Detection (Even/Odd) | **88.73%** | 50.0% | Ridge Regression |
-
-**Additional highlights:**
-- Training time: ~77 minutes (single pass, Ridge Regression) on Kaggle Tesla T4
-- Feature dimensionality: 15,680 (784 neurons × 20 temporal bins)
-- Task independence verified: χ²(4) = 63.51, p = 0.924
-- Zero catastrophic forgetting (fixed reservoir, independent linear readouts)
-- 32× more information density than binary spike-counting methods
-
----
-
-## Architecture Overview
+## Architecture
 
 ```
-Input (28×28 MNIST pixel)
+Input image (28×28 RGB)
         │
-        ▼
+        ▼ luminance: 0.299R + 0.587G + 0.114B
   Voltage Mapping
   [10.5 V → 12.2 V]
         │
         ▼
-┌───────────────────────────────────┐
-│   VO₂ Reservoir (fixed weights)   │
-│   784 thermal neuristors          │
-│   28×28 grid, thermally coupled   │
-│   t_max = 10 µs,  dt = 10 ns     │
-└───────────────────────────────────┘
-        │  Current trajectory I(t)
+┌─────────────────────────────────────┐
+│   VO₂ Reservoir  (fixed — no       │
+│   training)                         │
+│   784 thermal neuristors, 28×28     │
+│   thermally coupled, t_max = 10 μs  │
+└─────────────────────────────────────┘
+        │  current trajectory I(t)
         ▼
-  Temporal Pooling
-  500 ns bins → 20 time windows
-  Flatten → 15,680-dim feature vector
+  Temporal Max-Pooling
+  20 bins × 500 ns → flatten
+  → 15,680-dim feature vector
         │
-   ┌────┴────────┬────────────┐
-   ▼             ▼            ▼
+   ┌────┴──────────┬──────────────┐
+   ▼               ▼              ▼
 Readout_digit  Readout_color  Readout_parity
-(15680→10)     (15680→3)      (15680→2)
-Ridge Reg.     Ridge Reg.     Ridge Reg.
-   │             │             │
-Digit (0-9)   Color (R/G/B)  Parity (E/O)
+ Ridge (α=1e-3)  Ridge (α=1e-3)  Ridge (α=1e-3)
+   │               │              │
+Digit (0–9)   Color (10 cls)  Parity (E/O)
 ```
 
 ---
 
+## Repository Structure
+
 ```
-
-### GPU Setup (recommended)
-
-A CUDA-capable GPU with ≥ 8 GB VRAM is recommended. The code was developed and tested on an NVIDIA Tesla T4 (15 GB). CPU execution is supported but will be significantly slower for the reservoir simulation step.
-
----
-
-**Expected console output:**
-```
-======================================================================
-TEMPORAL POOLING SNN - GRAYSCALE ENCODING (PAPER'S APPROACH)
-======================================================================
-✓ GPU Optimized
-✓ 500ns temporal windows | 20 temporal bins
-✓ 784 neurons → 15,680 features
-Extracting reservoir features: 100%|████████| 300/300 [72:40<00:00]
-
-RESULTS:
-  Digit:  86.89%
-  Color:  76.50%
-  Parity: 88.73%
-  Training Duration: 4600.6s
-======================================================================
-```
-
-### 2. Use the reservoir as a feature extractor
-
-```python
-import torch
-from src.reservoir import Reservoir2D
-
-# Initialise reservoir with paper's validated hyperparameters
-reservoir = Reservoir2D(
-    batch=50,
-    Nx=28, Ny=28,
-    N_out=10,
-    V_min=10.5,     # V — maps to zero pixel intensity
-    V_max=12.2,     # V — maps to max pixel intensity
-    Cth_factor=0.15,
-    noise_strength=0.2e-3
-)
-reservoir.eval()
-
-# Extract features from a batch of images (values in [0, 1])
-images = torch.rand(50, 784)  # 50 images, flattened 28×28
-with torch.no_grad():
-    features = reservoir.reservoir_func(images)  # → (50, 15680)
-
-print(f"Feature shape: {features.shape}")  # torch.Size([50, 15680])
-```
-
-### 3. Load pre-trained classifiers and run inference
-
-```python
-import pickle
-from tasks.temporal_pooling_rgb_comprehensive import extract_features_only
-
-# Load trained classifiers
-with open('results/ridge_classifiers.pkl', 'rb') as f:
-    classifiers = pickle.load(f)
-
-# Extract reservoir features for new images
-features = extract_features_only(new_images, device='cuda')
-
-# Predict all three tasks simultaneously
-digit_preds  = classifiers['digit'].predict(features)
-color_preds  = classifiers['color'].predict(features)
-parity_preds = classifiers['parity'].predict(features)
+├── experiments/
+│   ├── 01_main_multitask.py       # Main results + catastrophic forgetting test
+│   ├── 03_timescale_masking.py    # Method 1: temporal window masking
+│   ├── 04_weight_importance.py    # Method 2: Ridge weight analysis
+│   ├── 05a_r1p0.py                # Causal: r_scale=1.0, τ_ins=7.54 μs
+│   ├── 05b_r05.py                 # Causal: r_scale=0.5, τ_ins=3.77 μs
+│   ├── 05c_r02.py                 # Causal: r_scale=0.2, τ_ins=1.51 μs
+│   ├── 05d_r01.py                 # Causal: r_scale=0.1, τ_ins=0.75 μs
+│   ├── 05e_analysis.py            # Causal analysis + experiments A & B
+│   └── 06_noise_sweep.py          # Noise-induced phase transition
+├── docs/
+│   └── physics_background.md      # VO₂ physics derivation
+├── results/                        # JSON outputs from all experiments
+├── requirements.txt
+├── environment.yml
+└── README.md
 ```
 
 ---
 
 ## Reproducing Results
 
-### On Kaggle (recommended — free T4 GPU)
+### Requirements
 
-1. Upload the repository to a Kaggle Dataset.
-2. Open `notebooks/multi_task_demo.ipynb` in a Kaggle Notebook.
-3. Enable GPU (Settings → Accelerator → GPU T4 × 1).
-4. Run all cells. Total runtime: ~80 minutes.
+```bash
+# Clone this repository
+git clone https://github.com/mandanarst19/Multi-Task-Learning-on-Phase-Change-Material
 
-### Key hyperparameters (from Zhang et al., arXiv:2312.12899v3)
+# Install dependencies
+pip install -r requirements.txt
+```
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `V_min` | 10.5 V | Input voltage for zero pixel intensity |
-| `V_max` | 12.2 V | Input voltage for maximum pixel intensity |
-| `Cth_factor` | 0.15 | Thermal capacitance scaling (Cth = 7.44 pJ/K) |
-| `noise_strength` | 0.2 µJ·s⁻¹/² | Stochastic fluctuation amplitude |
-| `t_max` | 10 µs | Simulation duration per image |
-| `dt` | 10 ns | Integration time step (Euler–Maruyama) |
-| `Δt_bin` | 500 ns | Temporal pooling window size |
-| `n_bins` | 20 | Number of temporal bins |
-| `R_load` | 12 kΩ | Load resistance |
-| `T_base` | 325 K | Ambient temperature |
-| `couple_factor` | 0.02 | Nearest-neighbour thermal coupling strength |
-| `α_digit` | 1×10⁻³ | Ridge regularisation — digit task |
-| `α_color` | 1×10⁻³ | Ridge regularisation — color task |
-| `α_parity` | 1×10⁻⁴ | Ridge regularisation — parity task |
+This code requires the VO₂ neuristor simulator from Zhang et al. (2023).  
+Add their dataset to your Kaggle notebook (see Dependencies below).
 
-### Colored MNIST Dataset
+### Running on Kaggle (recommended — free T4 GPU)
 
-Standard MNIST images are converted to a three-class color dataset by scaling pixel intensities:
-
-| Color | Label | Luminance Factor | Approximate Grayscale Equivalent |
-|-------|-------|-----------------|----------------------------------|
-| Red   | 0     | 1.00            | Bright (full intensity) |
-| Green | 1     | 0.70            | Medium intensity |
-| Blue  | 2     | 0.50            | Dim intensity |
-
-Color assignments are **random and independent of digit identity** (verified statistically). The reservoir receives a single grayscale channel computed as:
+Upload all scripts from `experiments/` to `/kaggle/working/`, then:
 
 ```python
-# Voltage-mapped grayscale input to reservoir
-V_input = V_min + (V_max - V_min) * (pixel_intensity / 255.0) * color_factor
+# Experiment 01 — Main results (~90 min, saves features for 03 & 04)
+exec(open('/kaggle/working/01_main_multitask.py').read())
+
+# Experiment 03 — Timescale masking (~10 min, no simulation)
+exec(open('/kaggle/working/03_timescale_masking.py').read())
+
+# Experiment 04 — Weight importance (~2 min, no simulation)
+exec(open('/kaggle/working/04_weight_importance.py').read())
+
+# Experiment 05 — Causal τ_ins (one script per Kaggle session, ~90 min each)
+exec(open('/kaggle/working/05a_r1p0.py').read())    # Session 1
+exec(open('/kaggle/working/05b_r05.py').read())     # Session 2
+exec(open('/kaggle/working/05c_r02.py').read())     # Session 3
+exec(open('/kaggle/working/05d_r01.py').read())     # Session 4
+exec(open('/kaggle/working/05e_analysis.py').read()) # Session 5 (~5 min)
+
+# Experiment 06 — Noise sweep (~2 sec, results pre-verified)
+exec(open('/kaggle/working/06_noise_sweep.py').read())
 ```
+
+Features are cached after first extraction — restarted sessions load from disk automatically.
 
 ---
 
-## Physics Background
+## Physical Parameters
 
-VO₂ is a correlated electron material that undergoes a sharp insulator-to-metal phase transition (IMT) near 340 K, with resistance dropping ~3 orders of magnitude. Each neuristor in the 28×28 array implements a physical leaky integrate-and-fire neuron:
-
-**Electrical dynamics:**
-$$C \frac{dV}{dt} = \frac{V_\text{in} - V}{R_\text{load}} - \frac{V}{R(T)}$$
-
-**Thermal dynamics:**
-$$C_\text{th} \frac{dT}{dt} = I^2 R(T) - S_\text{env}(T - T_0) + S_c \nabla^2 T + \sigma \xi(t)$$
-
-**VO₂ resistance (hysteresis model):**
-$$R(T, \delta) = R_m + \frac{R_0 e^{E_a/T} - R_m}{\left[1 + e^{-(T - T_c - w(1-\delta)/2)\,/\,(w/\beta)}\right]^\gamma}$$
-
-The three distinct physical timescales — τ_metallic ≈ 187 ns, τ_thermal ≈ 241 ns, τ_insulating ≈ 7.57 µs — create a ~40× separation that enables complex temporal processing ideal for reservoir computing.
-
-For a complete derivation and parameter justification, see `docs/physics_background.md`.
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Array size | 28×28 = 784 neuristors | Zhang et al. |
+| τ_met (metallic RC time) | ~187 ns | Zhang et al. |
+| τ_th (thermal RC time) | ~241 ns | Zhang et al. |
+| τ_ins (insulating RC time) | ~7.57 μs | Zhang et al. |
+| T_c (transition temperature) | 332.8 K | Zhang et al. |
+| Noise strength (optimal) | σ = 0.0002 μJ·s⁻¹/² | This work |
+| Temporal bins | 20 × 500 ns | This work |
+| Feature dimension | 784 × 20 = 15,680 | This work |
+| Input voltage range | 10.5 – 12.2 V | This work |
+| Ridge regularization α | 1×10⁻³ | This work |
 
 ---
 
-## Citation
+## Colored MNIST Dataset
 
-If you use this code or build upon this work, please cite:
+Standard MNIST images colored with 10 distinct colors using ITU-R BT.601 luminance conversion:
 
-```bibtex
-@article{[PLACEHOLDER: citekey],
-  author    = {Roosta, Mandana and [Mohseni, Majid]},
-  title     = {Exploiting VO₂ Phase-Transition Dynamics for Multi-Task Reservoir Computing Without Catastrophic Forgetting},
-  journal   = {[: IEEE TNNLS / journal name]},
-  year      = {[: 2026]},
-  volume    = {[: volume]},
-  pages     = {[: pages]},
-  doi       = {[: DOI]},
-  url       = {[: URL]}
-}
+```
+Gray = 0.299R + 0.587G + 0.114B → Voltage ∈ [10.5, 12.2] V
 ```
 
-The underlying VO₂ neuristor physics model is based on:
+| Color | Label | RGB |
+|-------|-------|-----|
+| Red | 0 | (1.0, 0.0, 0.0) |
+| Green | 1 | (0.0, 1.0, 0.0) |
+| Blue | 2 | (0.0, 0.0, 1.0) |
+| Yellow | 3 | (1.0, 1.0, 0.0) |
+| Magenta | 4 | (1.0, 0.0, 1.0) |
+| Cyan | 5 | (0.0, 1.0, 1.0) |
+| Orange | 6 | (1.0, 0.5, 0.0) |
+| Purple | 7 | (0.5, 0.0, 1.0) |
+| Dark Green | 8 | (0.0, 0.5, 0.0) |
+| Gray | 9 | (0.5, 0.5, 0.5) |
 
-```bibtex
-@article{zhang2024collective,
-  author    = {Zhang, [PLACEHOLDER: full author list]},
-  title     = {Collective dynamics and long-range order in thermal neuristor networks},
-  journal   = {Nature Commnucation },
-  year      = {2024},
+Color assignments are random and independent of digit identity — verified with chi-square test.
 
-}
+---
+
+## Dependencies
+
+The VO₂ neuristor simulator (Circuit2D) is from:
+
+> Zhang, Y. et al. (2023). *Collective dynamics and long-range order in thermal neuristor networks.* arXiv:2312.12899v3.
+
+All scripts auto-detect the simulator path:
+
+```python
+for root, dirs, files in os.walk('/kaggle/input'):
+    if 'model.py' in files:
+        sys.path.insert(0, root)
+        break
 ```
 
 ---
 
 ## License
 
-This project is licensed under the MIT License — see (LICENSE) for details.
+MIT License — see [LICENSE](LICENSE).
 
 ---
 
 ## Contact
 
-**Mandana Roosta**  
+Mandana Roosta 
 Master's Student in Physics  
-[Shahid Beheshti University /Physics Department]  
-📧 [mandanaroosta.academia@gmail.com]  
-🔗 [https://github.com/mandanarst19]
-
+Shahid Beheshti University  
+📧 mandanaroosta.academia@gmail.com  
+🔗 [github.com/mandanarst19](https://github.com/mandanarst19)
 
