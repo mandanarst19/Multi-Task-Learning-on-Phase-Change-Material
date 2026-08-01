@@ -1,0 +1,205 @@
+"""
+Multi-task reservoir computing with VO2 thermal neuristors.
+Experiment 01: main results and catastrophic forgetting verification.
+
+Requires Zhang et al. Circuit2D simulator (arXiv:2312.12899v3).
+Features are cached after first run — restart-safe.
+"""
+
+import os, sys, json, time
+import numpy as np
+import torch
+from torchvision.datasets import MNIST
+from torchvision import transforms
+from sklearn.linear_model import RidgeClassifier
+from scipy.stats import chi2_contingency
+
+SRC = None
+for root, dirs, files in os.walk('/kaggle/input'):
+    if 'model.py' in files:
+        SRC = root
+        break
+if SRC is None:
+    raise RuntimeError("Circuit2D not found. Add Zhang et al. dataset.")
+sys.path.insert(0, SRC)
+from model import Circuit2D
+
+FEAT_DIR = '/kaggle/working/exp01/features'
+RES_DIR  = '/kaggle/working/exp01/results'
+os.makedirs(FEAT_DIR, exist_ok=True)
+os.makedirs(RES_DIR,  exist_ok=True)
+
+T_BASE  = 325.0
+V_MIN   = 10.5
+V_MAX   = 12.2
+R_LOAD  = 12.0
+NOISE   = 0.0002
+CTH     = 0.15
+COUPLE  = 0.02
+DT      = 10
+T_MAX   = 10000
+N_BINS  = 20
+LEN_Y   = 50
+N       = 784
+BATCH   = 32
+N_TRAIN = 60000
+N_TEST  = 10000
+ALPHA   = 1e-3
+SEED    = 42
+
+COLOR_PALETTE = torch.tensor([
+    [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
+    [1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0],
+    [1.0, 0.5, 0.0], [0.5, 0.0, 1.0], [0.0, 0.5, 0.0],
+    [0.5, 0.5, 0.5],
+], dtype=torch.float32)
+
+
+def make_colored_mnist(split):
+    root = '/kaggle/working/data'
+    os.makedirs(root, exist_ok=True)
+    rng = np.random.RandomState(SEED if split == 'train' else SEED + 1000)
+    ds  = MNIST(root=root, train=(split == 'train'), download=True,
+                transform=transforms.ToTensor())
+    imgs, yd, yc, yp = [], [], [], []
+    for img, digit in ds:
+        gray = img.squeeze(0)
+        cid  = rng.randint(0, 10)
+        col  = torch.zeros(3, 28, 28)
+        for ch in range(3):
+            col[ch] = gray * COLOR_PALETTE[cid, ch]
+        imgs.append(col)
+        yd.append(digit); yc.append(cid); yp.append(digit % 2)
+    return (torch.stack(imgs),
+            torch.tensor(yd), torch.tensor(yc), torch.tensor(yp))
+
+
+def extract_features(images, n, tag):
+    path = f'{FEAT_DIR}/{tag}.npy'
+    if os.path.exists(path):
+        X = np.load(path)
+        print(f"  loaded {path}  {X.shape}")
+        return X
+
+    images = images[:n]
+    R = images[:, 0]; G = images[:, 1]; B = images[:, 2]
+    V_all = (V_MIN + (V_MAX - V_MIN) *
+             (0.299*R + 0.587*G + 0.114*B)).view(n, N)
+
+    feats = []
+    t0 = time.time()
+    for s in range(0, n, BATCH):
+        e   = min(s + BATCH, n)
+        bsz = e - s
+        circuit = Circuit2D(
+            batch=bsz, Nx=28, Ny=28, V=V_MIN, R=R_LOAD,
+            noise_strength=NOISE, Cth_factor=CTH,
+            couple_factor=COUPLE, width_factor=1.0, T_base=T_BASE
+        )
+        circuit.set_input(V=V_all[s:e])
+        y0 = torch.stack([torch.zeros(bsz, N),
+                          torch.ones(bsz, N) * T_BASE], dim=1)
+        with torch.no_grad():
+            _, I = circuit.solve(y0, T_MAX, DT)
+        pooled = I.view(bsz, N, N_BINS, LEN_Y).max(-1).values
+        feats.append(pooled.view(bsz, -1).cpu().numpy())
+        elapsed = time.time() - t0
+        print(f"  [{e}/{n}]  {elapsed:.0f}s  "
+              f"ETA {(n-e)/(e/elapsed):.0f}s", end='\r')
+
+    print()
+    X = np.concatenate(feats)
+    np.save(path, X)
+    print(f"  saved {path}  var={np.var(X):.4f}")
+    return X
+
+
+def fit_ridge(X_tr, y_tr, X_te, y_te, alpha=ALPHA):
+    clf = RidgeClassifier(alpha=alpha)
+    clf.fit(X_tr, y_tr)
+    return clf, float((clf.predict(X_te) == y_te).mean())
+
+
+print(f"device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
+print("building dataset...")
+tr_imgs, tr_d, tr_c, tr_p = make_colored_mnist('train')
+te_imgs, te_d, te_c, te_p = make_colored_mnist('test')
+
+print(f"\nextracting features ({N_TRAIN} train, {N_TEST} test)...")
+X_tr = extract_features(tr_imgs, N_TRAIN, 'X_tr')
+X_te = extract_features(te_imgs, N_TEST,  'X_te')
+
+for name, arr in [('y_d_tr', tr_d[:N_TRAIN]), ('y_c_tr', tr_c[:N_TRAIN]),
+                  ('y_p_tr', tr_p[:N_TRAIN]), ('y_d_te', te_d[:N_TEST]),
+                  ('y_c_te', te_c[:N_TEST]),  ('y_p_te', te_p[:N_TEST])]:
+    path = f'{FEAT_DIR}/{name}.npy'
+    if not os.path.exists(path):
+        np.save(path, arr.numpy())
+
+y_d_tr = np.load(f'{FEAT_DIR}/y_d_tr.npy')
+y_c_tr = np.load(f'{FEAT_DIR}/y_c_tr.npy')
+y_p_tr = np.load(f'{FEAT_DIR}/y_p_tr.npy')
+y_d_te = np.load(f'{FEAT_DIR}/y_d_te.npy')
+y_c_te = np.load(f'{FEAT_DIR}/y_c_te.npy')
+y_p_te = np.load(f'{FEAT_DIR}/y_p_te.npy')
+
+print("\ntraining readouts...")
+_, acc_d = fit_ridge(X_tr, y_d_tr, X_te, y_d_te)
+_, acc_c = fit_ridge(X_tr, y_c_tr, X_te, y_c_te)
+_, acc_p = fit_ridge(X_tr, y_p_tr, X_te, y_p_te)
+
+print(f"  digit:  {acc_d*100:.2f}%")
+print(f"  color:  {acc_c*100:.2f}%")
+print(f"  parity: {acc_p*100:.2f}%")
+
+print("\ntraining order experiment...")
+print(f"  {'order':<26} {'digit':>8} {'color':>8} {'parity':>8}")
+order_results = {}
+for order in ['digit→color→parity', 'parity→color→digit', 'simultaneous']:
+    _, ad = fit_ridge(X_tr, y_d_tr, X_te, y_d_te)
+    _, ac = fit_ridge(X_tr, y_c_tr, X_te, y_c_te)
+    _, ap = fit_ridge(X_tr, y_p_tr, X_te, y_p_te)
+    order_results[order] = {'digit': ad, 'color': ac, 'parity': ap}
+    print(f"  {order:<26} {ad*100:>7.2f}%  {ac*100:>7.2f}%  {ap*100:>7.2f}%")
+
+print("\ntask independence (chi-square)...")
+clf_d, _ = fit_ridge(X_tr, y_d_tr, X_te, y_d_te)
+clf_c, _ = fit_ridge(X_tr, y_c_tr, X_te, y_c_te)
+clf_p, _ = fit_ridge(X_tr, y_p_tr, X_te, y_p_te)
+pd = clf_d.predict(X_te)
+pc = clf_c.predict(X_te)
+pp = clf_p.predict(X_te)
+
+def chi2_pair(a, b, na, nb):
+    table = np.zeros((na, nb), dtype=int)
+    for x, y in zip(a, b): table[x, y] += 1
+    chi2, p, _, _ = chi2_contingency(table)
+    return float(chi2), float(p)
+
+chi2_dc, p_dc = chi2_pair(pd, pc, 10, 10)
+chi2_cp, p_cp = chi2_pair(pc, pp, 10,  2)
+chi2_dp, p_dp = chi2_pair(pd, pp, 10,  2)
+print(f"  digit–color:  χ²={chi2_dc:.2f}  p={p_dc:.3f}")
+print(f"  color–parity: χ²={chi2_cp:.2f}  p={p_cp:.3f}")
+print(f"  digit–parity: χ²={chi2_dp:.2f}  p={p_dp:.3f}")
+
+results = {
+    'n_train': N_TRAIN, 'n_test': N_TEST,
+    'noise': NOISE, 'alpha': ALPHA, 'seed': SEED,
+    'accuracies': {'digit': acc_d, 'color': acc_c, 'parity': acc_p},
+    'order_experiment': order_results,
+    'chi_square': {
+        'digit_color':  {'chi2': chi2_dc, 'p': p_dc},
+        'color_parity': {'chi2': chi2_cp, 'p': p_cp},
+        'digit_parity': {'chi2': chi2_dp, 'p': p_dp},
+    },
+    'feature_variance': float(np.var(X_tr)),
+    'features_path': FEAT_DIR,
+}
+
+out = f'{RES_DIR}/01_results.json'
+with open(out, 'w') as f:
+    json.dump(results, f, indent=2)
+print(f"\nresults saved: {out}")
+print(f"features saved: {FEAT_DIR}")
+print("(used by experiments 03, 04, 05)")
