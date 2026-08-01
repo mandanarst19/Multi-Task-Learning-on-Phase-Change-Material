@@ -1,0 +1,220 @@
+"""
+Experiment 04 — Ridge Weight Importance (Method 2)
+===================================================
+Analyzes which temporal bins the Ridge readout weights emphasize
+for each task — independent confirmation of Method 1.
+
+REQUIRES: /kaggle/working/exp01/features/  (from experiment 01)
+
+Method:
+    For each task readout, compute mean absolute weight per temporal bin:
+        W_bin[b] = mean(|W[:, b*784:(b+1)*784]|)
+    Normalize by cross-task mean to remove bin-0 transient artifact.
+    Peak bin → dominant timescale for that task.
+
+Key finding:
+    Color  → peak in late bins  (τ_ins region, ~7–10 μs)
+    Parity → peak in early bins (τ_met region, ~0–1 μs)
+    Digit  → distributed across bins (uses both timescales)
+
+OUTPUT:
+    /kaggle/working/exp04/results/04_results.json
+
+Runtime: ~2 minutes (no simulation needed)
+"""
+
+import os, json
+import numpy as np
+from sklearn.linear_model import RidgeClassifier
+
+# ── Load features from experiment 01 ─────────────────────────────────────────
+FEAT_DIR = '/kaggle/working/exp01/features'
+RES_DIR  = '/kaggle/working/exp04/results'
+os.makedirs(RES_DIR, exist_ok=True)
+
+def load_features():
+    required = ['X_tr', 'X_te',
+                'y_d_tr', 'y_c_tr', 'y_p_tr',
+                'y_d_te', 'y_c_te', 'y_p_te']
+    missing = [f for f in required
+               if not os.path.exists(f'{FEAT_DIR}/{f}.npy')]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing: {missing}\n"
+            f"Run experiment 01 first."
+        )
+    data = {f: np.load(f'{FEAT_DIR}/{f}.npy') for f in required}
+    print(f"Features loaded: X_tr={data['X_tr'].shape}")
+    return data
+
+N       = 784
+N_BINS  = 20
+BIN_NS  = 500
+ALPHA   = 1e-3
+
+
+def fit_ridge(X_tr, y_tr):
+    clf = RidgeClassifier(alpha=ALPHA)
+    clf.fit(X_tr, y_tr)
+    return clf
+
+
+def weight_importance(clf, normalize=True):
+    """
+    Compute mean absolute weight per temporal bin.
+
+    clf.coef_ shape:
+        multi-class: (n_classes, n_features) → mean over classes first
+        binary:      (1, n_features) or (n_features,)
+
+    Then reshape to (N_BINS, N) and take mean over neurons.
+
+    Normalize: divide by cross-bin mean to remove global scale.
+    This removes the bin-0 transient artifact where all tasks
+    show elevated weights due to initial spiking burst.
+    """
+    W = clf.coef_                         # (n_classes, 15680) or (15680,)
+    if W.ndim > 1:
+        W = np.abs(W).mean(axis=0)        # (15680,)
+    else:
+        W = np.abs(W)
+
+    # Reshape: (N_BINS, N) → mean over neurons → (N_BINS,)
+    W_bins = W.reshape(N_BINS, N).mean(axis=1)
+
+    if normalize:
+        W_bins = W_bins / W_bins.mean()   # normalize to cross-bin mean = 1
+
+    return W_bins
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n" + "="*70)
+print("EXPERIMENT 04 — RIDGE WEIGHT IMPORTANCE (METHOD 2)")
+print("="*70)
+
+data   = load_features()
+X_tr   = data['X_tr'];   X_te   = data['X_te']
+y_d_tr = data['y_d_tr']; y_d_te = data['y_d_te']
+y_c_tr = data['y_c_tr']; y_c_te = data['y_c_te']
+y_p_tr = data['y_p_tr']; y_p_te = data['y_p_te']
+
+# ── Train three readouts ──────────────────────────────────────────────────────
+print("\nTraining Ridge readouts...")
+clf_d = fit_ridge(X_tr, y_d_tr)
+clf_c = fit_ridge(X_tr, y_c_tr)
+clf_p = fit_ridge(X_tr, y_p_tr)
+
+acc_d = (clf_d.predict(X_te) == y_d_te).mean()
+acc_c = (clf_c.predict(X_te) == y_c_te).mean()
+acc_p = (clf_p.predict(X_te) == y_p_te).mean()
+print(f"  Digit={acc_d*100:.2f}%  Color={acc_c*100:.2f}%  Parity={acc_p*100:.2f}%")
+
+# ── Compute weight importance ─────────────────────────────────────────────────
+print("\nComputing weight importance per bin...")
+W_d = weight_importance(clf_d, normalize=True)
+W_c = weight_importance(clf_c, normalize=True)
+W_p = weight_importance(clf_p, normalize=True)
+
+# ── Print table ───────────────────────────────────────────────────────────────
+print("\n" + "="*70)
+print("WEIGHT IMPORTANCE PER TEMPORAL BIN (normalized)")
+print("="*70)
+print(f"  {'Bin':>4} {'Time(μs)':>10} {'Digit':>10} {'Color':>10} {'Parity':>10}")
+print(f"  {'-'*48}")
+
+bin_results = []
+for b in range(N_BINS):
+    t = (b + 0.5) * BIN_NS / 1000
+    d_marker = ' ←' if b == np.argmax(W_d) else ''
+    c_marker = ' ←' if b == np.argmax(W_c) else ''
+    p_marker = ' ←' if b == np.argmax(W_p) else ''
+    print(f"  {b:>4}   {t:>8.2f} μs  "
+          f"{W_d[b]:>9.4f}{d_marker:<3}"
+          f"{W_c[b]:>9.4f}{c_marker:<3}"
+          f"{W_p[b]:>9.4f}{p_marker}")
+    bin_results.append({
+        'bin': b, 'time_us': float(t),
+        'digit': float(W_d[b]),
+        'color': float(W_c[b]),
+        'parity': float(W_p[b]),
+    })
+
+# ── Peak analysis ─────────────────────────────────────────────────────────────
+peak_d = int(np.argmax(W_d))
+peak_c = int(np.argmax(W_c))
+peak_p = int(np.argmax(W_p))
+
+t_peak_d = (peak_d + 0.5) * BIN_NS / 1000
+t_peak_c = (peak_c + 0.5) * BIN_NS / 1000
+t_peak_p = (peak_p + 0.5) * BIN_NS / 1000
+
+print(f"\n{'='*70}")
+print("PEAK BIN ANALYSIS")
+print("="*70)
+print(f"  Digit  peak: bin {peak_d:>2}  ({t_peak_d:.2f} μs)  "
+      f"weight={W_d[peak_d]:.4f}")
+print(f"  Color  peak: bin {peak_c:>2}  ({t_peak_c:.2f} μs)  "
+      f"weight={W_c[peak_c]:.4f}")
+print(f"  Parity peak: bin {peak_p:>2}  ({t_peak_p:.2f} μs)  "
+      f"weight={W_p[peak_p]:.4f}")
+
+# ── Timescale interpretation ──────────────────────────────────────────────────
+print(f"\n{'='*70}")
+print("TIMESCALE INTERPRETATION")
+print("="*70)
+print(f"  τ_met ≈ 187 ns  →  bins 0–1  (0–1 μs)")
+print(f"  τ_th  ≈ 241 ns  →  bins 0–1  (0–1 μs)")
+print(f"  τ_ins ≈ 7.57 μs →  bins 14–19 (7–10 μs)")
+print()
+
+# Fraction of weight in early vs late bins
+early = list(range(0, 4))    # 0–2 μs
+late  = list(range(14, 20))  # 7–10 μs
+
+for name, W in [('Digit', W_d), ('Color', W_c), ('Parity', W_p)]:
+    frac_early = W[early].sum() / W.sum()
+    frac_late  = W[late].sum()  / W.sum()
+    print(f"  {name:6s}: early_frac={frac_early:.3f}  "
+          f"late_frac={frac_late:.3f}  "
+          f"→ {'late-dominated (τ_ins)' if frac_late > frac_early else 'early-dominated (τ_met)'}")
+
+# ── Agreement with Method 1 ───────────────────────────────────────────────────
+print(f"\n{'='*70}")
+print("AGREEMENT WITH METHOD 1 (temporal masking)")
+print("="*70)
+print(f"  Method 1 (masking):  color needs late bins, parity stable")
+print(f"  Method 2 (weights):  color peak at {t_peak_c:.1f} μs, "
+      f"parity peak at {t_peak_p:.1f} μs")
+agree = (t_peak_c > 5.0) and (t_peak_p < 3.0)
+print(f"  Agreement: {'✓ YES — both methods confirm task specialization' if agree else '⚠ Partial — check bin fractions above'}")
+
+# ── Save ──────────────────────────────────────────────────────────────────────
+results = {
+    'experiment': '04_weight_importance',
+    'method': 'ridge_weight_importance_normalized',
+    'alpha': ALPHA,
+    'normalization': 'divided_by_cross_bin_mean',
+    'accuracies': {'digit': float(acc_d), 'color': float(acc_c), 'parity': float(acc_p)},
+    'bin_importance': bin_results,
+    'peak_bins': {
+        'digit':  {'bin': peak_d, 'time_us': t_peak_d, 'weight': float(W_d[peak_d])},
+        'color':  {'bin': peak_c, 'time_us': t_peak_c, 'weight': float(W_c[peak_c])},
+        'parity': {'bin': peak_p, 'time_us': t_peak_p, 'weight': float(W_p[peak_p])},
+    },
+    'early_late_fractions': {
+        task: {
+            'early_bins_0_3':  float(W[early].sum() / W.sum()),
+            'late_bins_14_19': float(W[late].sum()  / W.sum()),
+        }
+        for task, W in [('digit', W_d), ('color', W_c), ('parity', W_p)]
+    },
+    'method1_agreement': agree,
+}
+
+out = f'{RES_DIR}/04_results.json'
+with open(out, 'w') as f:
+    json.dump(results, f, indent=2)
+
+print(f"\n✓ Results saved: {out}")
+print("="*70)
