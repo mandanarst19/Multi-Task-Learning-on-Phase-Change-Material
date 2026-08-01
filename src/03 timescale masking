@@ -1,0 +1,188 @@
+"""
+Experiment 03 — Temporal Window Masking (Method 1)
+===================================================
+Tests which temporal bins carry task-relevant information.
+
+REQUIRES: /kaggle/working/exp01/features/  (from experiment 01)
+
+Method:
+    Train Ridge readout using ONLY a subset of temporal bins.
+    Repeat for all possible contiguous windows of width W.
+    Compare color vs parity sensitivity to bin selection.
+
+Key finding:
+    Color accuracy collapses when slow bins (τ_ins region) are removed.
+    Parity accuracy is stable across all windows.
+
+OUTPUT:
+    /kaggle/working/exp03/results/03_results.json
+
+Runtime: ~10 minutes (no simulation needed — uses cached features)
+"""
+
+import os, sys, json, time
+import numpy as np
+from sklearn.linear_model import RidgeClassifier
+
+# ── Load features from experiment 01 ─────────────────────────────────────────
+FEAT_DIR = '/kaggle/working/exp01/features'
+RES_DIR  = '/kaggle/working/exp03/results'
+os.makedirs(RES_DIR, exist_ok=True)
+
+def load_features():
+    required = ['X_tr', 'X_te',
+                'y_d_tr', 'y_c_tr', 'y_p_tr',
+                'y_d_te', 'y_c_te', 'y_p_te']
+    missing = [f for f in required
+               if not os.path.exists(f'{FEAT_DIR}/{f}.npy')]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing files: {missing}\n"
+            f"Run experiment 01 first:\n"
+            f"  exec(open('/kaggle/working/01_main_multitask.py').read())"
+        )
+    data = {f: np.load(f'{FEAT_DIR}/{f}.npy') for f in required}
+    print(f"Features loaded from {FEAT_DIR}/")
+    print(f"  X_tr: {data['X_tr'].shape}  X_te: {data['X_te'].shape}")
+    return data
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+N        = 784
+N_BINS   = 20        # 20 temporal bins × 500 ns = 10 μs total
+BIN_NS   = 500       # ns per bin
+ALPHA    = 1e-3
+
+def bins_to_time(bins):
+    """Convert bin indices to time range in μs."""
+    t_start = min(bins) * BIN_NS / 1000
+    t_end   = (max(bins) + 1) * BIN_NS / 1000
+    return t_start, t_end
+
+def select_bins(X, bins):
+    """Extract features for specific temporal bins only."""
+    n = X.shape[0]
+    X_3d = X.reshape(n, N, N_BINS)
+    return X_3d[:, :, list(bins)].reshape(n, -1)
+
+def ridge_acc(X_tr, y_tr, X_te, y_te, alpha=ALPHA):
+    clf = RidgeClassifier(alpha=alpha)
+    clf.fit(X_tr, y_tr)
+    return float((clf.predict(X_te) == y_te).mean())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n" + "="*70)
+print("EXPERIMENT 03 — TEMPORAL WINDOW MASKING (METHOD 1)")
+print("="*70)
+
+data = load_features()
+X_tr   = data['X_tr'];   X_te   = data['X_te']
+y_d_tr = data['y_d_tr']; y_d_te = data['y_d_te']
+y_c_tr = data['y_c_tr']; y_c_te = data['y_c_te']
+y_p_tr = data['y_p_tr']; y_p_te = data['y_p_te']
+
+# ── PART A: Single-bin importance ─────────────────────────────────────────────
+print("\n[Part A] Single-bin accuracy (each bin independently)")
+print(f"  {'Bin':>4} {'Time(μs)':>10} {'Color':>8} {'Parity':>8} {'Digit':>8}")
+print(f"  {'-'*44}")
+
+single_bin_results = []
+for b in range(N_BINS):
+    Xtr_b = select_bins(X_tr, [b])
+    Xte_b = select_bins(X_te, [b])
+    ac = ridge_acc(Xtr_b, y_c_tr, Xte_b, y_c_te)
+    ap = ridge_acc(Xtr_b, y_p_tr, Xte_b, y_p_te)
+    ad = ridge_acc(Xtr_b, y_d_tr, Xte_b, y_d_te)
+    t  = (b + 0.5) * BIN_NS / 1000
+    single_bin_results.append({
+        'bin': b, 'time_us': t,
+        'color': ac, 'parity': ap, 'digit': ad
+    })
+    print(f"  {b:>4}   {t:>8.2f} μs  {ac*100:>7.2f}%  {ap*100:>7.2f}%  {ad*100:>7.2f}%")
+
+# ── PART B: Cumulative windows ────────────────────────────────────────────────
+print("\n[Part B] Cumulative windows (bins 0→k)")
+print(f"  {'Window':>12} {'Time(μs)':>12} {'Color':>8} {'Parity':>8} {'Digit':>8}")
+print(f"  {'-'*52}")
+
+cumulative_results = []
+for k in range(1, N_BINS + 1):
+    bins = list(range(k))
+    Xtr_b = select_bins(X_tr, bins)
+    Xte_b = select_bins(X_te, bins)
+    ac = ridge_acc(Xtr_b, y_c_tr, Xte_b, y_c_te)
+    ap = ridge_acc(Xtr_b, y_p_tr, Xte_b, y_p_te)
+    ad = ridge_acc(Xtr_b, y_d_tr, Xte_b, y_d_te)
+    t_end = k * BIN_NS / 1000
+    cumulative_results.append({
+        'n_bins': k, 'time_end_us': t_end,
+        'color': ac, 'parity': ap, 'digit': ad
+    })
+    print(f"  bins 0–{k-1:>2}   0–{t_end:>5.2f} μs  "
+          f"{ac*100:>7.2f}%  {ap*100:>7.2f}%  {ad*100:>7.2f}%")
+
+# ── PART C: Early vs Late windows (key comparison) ────────────────────────────
+print("\n[Part C] Early vs Late window comparison")
+print("  Early = bins 0–3  (0–2 μs,  τ_met region)")
+print("  Late  = bins 16–19 (8–10 μs, τ_ins region)")
+print()
+
+windows = {
+    'Early [0–3]   (0–2 μs)':   list(range(0,  4)),
+    'Early [0–7]   (0–4 μs)':   list(range(0,  8)),
+    'Late  [12–19] (6–10 μs)':  list(range(12, 20)),
+    'Late  [16–19] (8–10 μs)':  list(range(16, 20)),
+    'Full  [0–19]  (0–10 μs)':  list(range(0,  20)),
+}
+
+window_results = {}
+print(f"  {'Window':<28} {'Color':>8} {'Parity':>8} {'Digit':>8}")
+print(f"  {'-'*56}")
+for name, bins in windows.items():
+    Xtr_b = select_bins(X_tr, bins)
+    Xte_b = select_bins(X_te, bins)
+    ac = ridge_acc(Xtr_b, y_c_tr, Xte_b, y_c_te)
+    ap = ridge_acc(Xtr_b, y_p_tr, Xte_b, y_p_te)
+    ad = ridge_acc(Xtr_b, y_d_tr, Xte_b, y_d_te)
+    window_results[name] = {'color': ac, 'parity': ap, 'digit': ad}
+    print(f"  {name:<28} {ac*100:>7.2f}%  {ap*100:>7.2f}%  {ad*100:>7.2f}%")
+
+# ── PART D: Color drop analysis ───────────────────────────────────────────────
+full_color  = window_results['Full  [0–19]  (0–10 μs)']['color']
+early_color = window_results['Early [0–3]   (0–2 μs)']['color']
+late_color  = window_results['Late  [16–19] (8–10 μs)']['color']
+full_parity  = window_results['Full  [0–19]  (0–10 μs)']['parity']
+early_parity = window_results['Early [0–3]   (0–2 μs)']['parity']
+
+color_drop_early = (full_color - early_color) * 100
+parity_drop_early = (full_parity - early_parity) * 100
+
+print(f"\n[Part D] Key statistics for paper")
+print(f"  Color drop (full→early only):  {color_drop_early:.1f} pp")
+print(f"  Parity drop (full→early only): {parity_drop_early:.1f} pp")
+print(f"  Ratio: {color_drop_early/parity_drop_early:.1f}×  "
+      f"(color much more sensitive to slow bins)")
+
+# ── Save ──────────────────────────────────────────────────────────────────────
+results = {
+    'experiment': '03_timescale_masking',
+    'method': 'temporal_window_masking',
+    'n_bins': N_BINS,
+    'bin_width_ns': BIN_NS,
+    'alpha': ALPHA,
+    'single_bin': single_bin_results,
+    'cumulative': cumulative_results,
+    'key_windows': window_results,
+    'summary': {
+        'color_drop_early_only_pp': color_drop_early,
+        'parity_drop_early_only_pp': parity_drop_early,
+        'ratio': color_drop_early / parity_drop_early,
+    }
+}
+
+out = f'{RES_DIR}/03_results.json'
+with open(out, 'w') as f:
+    json.dump(results, f, indent=2)
+
+print(f"\n✓ Results saved: {out}")
+print("="*70)
