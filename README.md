@@ -1,4 +1,4 @@
-# Code and data: multi-task reservoir computing with a simulated VO₂ neuristor array (Paper 1)
+# Code and data: multi-task reservoir computing with a simulated VO₂ neuristor array 
 
 This package holds every script and data file needed to reproduce the numbers and figures of the paper:
 - a 28 × 28 array of thermally coupled VO₂ neuristors (device model of Zhang et al., *Nat. Commun.* **15**, 6986 (2024));
